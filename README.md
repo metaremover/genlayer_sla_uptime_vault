@@ -1,20 +1,20 @@
 # Decentralized Infrastructure SLA Uptime & SLA Breach Decision Oracle
 
-An Intelligent Contract decision primitive built on **GenLayer** for automated enterprise IT infrastructure SLA monitoring, DNS health token auditing, and SLA breach decision gates grounded in Google Public DNS and grounded time APIs.
+An Intelligent Contract decision primitive built on **GenLayer** for automated enterprise IT infrastructure SLA monitoring, DNS health token auditing, and SLA breach decision gates grounded in Google Public DNS and grounded calendar time APIs.
 
 ---
 
 ## 📖 Overview
 
-The `SlaUptimeVault` decision oracle allows enterprise IT providers and clients to register SLA coverage parameters. Rather than holding unbacked token deposits, it substantively binds Google Public DNS health token records (`dns.google`) and grounded calendar dates (`api.frankfurter.app`) to produce on-chain decision verdicts (`SLA_COVERAGE_ACTIVE` $\rightarrow$ `SLA_VIOLATION_PENALIZED` / `SLA_PERIOD_COMPLETED_PASSED`).
+The `SlaUptimeVault` decision oracle allows enterprise IT providers and clients to register SLA coverage parameters. Rather than holding unbacked token deposits, it substantively binds grounded calendar dates (`api.frankfurter.app`) and Google Public DNS health token records (`dns.google`) to produce on-chain decision verdicts (`SLA_COVERAGE_ACTIVE` $\rightarrow$ `SLA_VIOLATION_PENALIZED` / `SLA_PERIOD_COMPLETED_PASSED`).
 
 ---
 
 ## 🛡️ Key Features & Guardrails
 
-1. **Start-Date Timing Guard**: Enforces `today_date >= start_date` using grounded time from Frankfurter API (`[ERR_TERM_01]`), rejecting premature audits before the SLA coverage start date.
-2. **Unfakeable Derived Endpoints**: Query URLs constructed internally from registered service domain (`dns.google/resolve?name={domain}&type=TXT`). No user-supplied URLs.
-3. **Substantive 2-Way Validator Criteria**: Criteria requires verifying nodes to independently parse DNS Answer TXT arrays and reject any leader proposal if health status is inconsistent in EITHER direction.
+1. **Start-Date Timing Guard Executed First**: Queries grounded calendar time from Frankfurter API (`api.frankfurter.app`) at the very beginning of the audit. Enforces `today_date >= start_date` (`[ERR_TERM_01]`), blocking ANY violation or audit transition before the SLA start date.
+2. **Bidirectional DNS Record Availability Binding**: Criteria requires consensus nodes to independently inspect DNS payload presence and reject proposals if `dns_records_found` is inconsistent in **EITHER direction** (true when missing or false when present).
+3. **Data Availability Assertion Guard**: Missing or corrupted DNS responses abort cleanly (`[ERR_DATA_01]`) without penalizing, preventing network dropouts from being recorded as SLA breach violations.
 4. **Access Control**: Audits strictly restricted to service provider, client, or contract operator (`[ERR_AUTH_01]`).
 
 ---
