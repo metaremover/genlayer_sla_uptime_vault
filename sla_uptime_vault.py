@@ -95,6 +95,69 @@ class SlaUptimeVault(gl.Contract):
         s_date = vault.start_date
         e_date = vault.end_date
 
+        # STEP 1: GROUNDED CALENDAR TIME & START-DATE GUARD (FIRST ROUND)
+        # We must verify today_date >= start_date BEFORE evaluating any DNS health or violations
+        time_url = "https://api.frankfurter.app/latest?from=USD&to=EUR"
+
+        def get_time_input() -> str:
+            time_response = gl.nondet.web.render(time_url, mode="text")
+            return (
+                f"Frankfurter Clock API Response (today's date):\n\n"
+                f"{time_response}\n\n"
+                f"SLA coverage start date: {s_date}\n"
+                f"SLA coverage end date: {e_date}"
+            )
+
+        time_task = (
+            "You are a calendar date verification auditor.\n"
+            "Parse the Frankfurter API JSON response.\n"
+            "Extract the 'date' field (format YYYY-MM-DD) - this is today's date.\n"
+            "Compare today's date against SLA start_date and end_date.\n\n"
+            "Output JSON format:\n"
+            "{\n"
+            '  "today_date": "<YYYY-MM-DD from API>",\n'
+            '  "term_started": true/false,\n'
+            '  "term_expired": true/false\n'
+            "}\n"
+            "Set term_started to true if today_date >= start_date.\n"
+            "Set term_expired to true if today_date >= end_date.\n"
+            "Respond ONLY with raw JSON."
+        )
+
+        time_criteria = (
+            "Independently parse the Frankfurter API JSON to extract the 'date' field. "
+            "Compare it against the SLA start and end dates using string comparison. "
+            "REJECT the leader if: "
+            "(1) today_date does not match the 'date' field in the API response, "
+            "(2) term_started boolean is inconsistent with (today_date >= start_date) in EITHER direction, or "
+            "(3) term_expired boolean is inconsistent with (today_date >= end_date) in EITHER direction."
+        )
+
+        time_result = gl.eq_principle.prompt_non_comparative(
+            get_time_input,
+            task=time_task,
+            criteria=time_criteria
+        )
+
+        raw_time = time_result.strip()
+        if "</think>" in raw_time:
+            raw_time = raw_time.split("</think>")[-1].strip()
+        if raw_time.startswith("```"):
+            t_lines = raw_time.split("\n")
+            if len(t_lines) >= 3 and t_lines[0].startswith("```") and t_lines[-1].startswith("```"):
+                raw_time = "\n".join(t_lines[1:-1]).strip()
+            else:
+                raw_time = raw_time.replace("```json", "").replace("```", "").strip()
+
+        time_parsed = json.loads(raw_time)
+        term_started = bool(time_parsed.get("term_started", False))
+        term_expired = bool(time_parsed.get("term_expired", False))
+        today_str = str(time_parsed.get("today_date", ""))
+
+        # Start-Date Guard: Prevent ANY violation or audit transition before start_date
+        assert term_started == True, f"[ERR_TERM_01] SLA audit rejected: today's date ({today_str}) is before coverage start_date ({s_date})."
+
+        # STEP 2: GOOGLE PUBLIC DNS HEALTH AUDIT (SECOND ROUND)
         # Derive Google Public DNS TXT query URL internally from service domain
         dns_url = "https://dns.google/resolve?name=" + domain + "&type=TXT"
 
@@ -114,10 +177,11 @@ class SlaUptimeVault(gl.Contract):
             "- type: 16 (TXT record)\n"
             "- data: TXT record content string (e.g. \"v=spf1 include:_spf.google.com ~all\")\n\n"
             "Your job:\n"
-            "1. Inspect all 'data' strings in the 'Answer' array.\n"
-            "2. Search if the required SLA health token string is present in any of the TXT record 'data' strings.\n"
-            "3. If the required health token is present, health_verified is TRUE (SLA intact).\n"
-            "4. If the required health token is missing or Answer array is absent, health_verified is FALSE (SLA violation/downtime).\n\n"
+            "1. Inspect if valid DNS Answer TXT records are present in the response (dns_records_found).\n"
+            "2. Inspect all 'data' strings in the 'Answer' array for the required SLA health token.\n"
+            "3. If valid DNS records exist AND the required health token is present: health_verified=true.\n"
+            "4. If valid DNS records exist BUT the required health token is missing: health_verified=false (SLA breach).\n"
+            "5. If DNS query failed or Answer array is missing/error: dns_records_found=false, health_verified=false.\n\n"
             "Output JSON format:\n"
             "{\n"
             '  "dns_records_found": true/false,\n'
@@ -132,9 +196,10 @@ class SlaUptimeVault(gl.Contract):
             "Independently parse the Google Public DNS JSON response from the input. "
             "Inspect the 'Answer' array yourself and check all 'data' strings for the required SLA health token. "
             "REJECT the leader's proposal if: "
-            "(1) the proposed health_verified boolean is inconsistent with whether the required health token exists in the DNS Answer array in EITHER direction (true when missing or false when present), "
-            "(2) the proposed detected_txt_record does not match the actual DNS Answer data, or "
-            "(3) the leader claims dns_records_found=false when valid Answer records exist. "
+            "(1) the proposed dns_records_found boolean is inconsistent with whether valid DNS Answer records exist in EITHER direction (true when missing or false when present), "
+            "(2) the proposed health_verified boolean is inconsistent with whether the required health token exists in the DNS Answer array in EITHER direction, "
+            "(3) the proposed detected_txt_record does not match the actual DNS Answer data, or "
+            "(4) the proposal asserts health_verified=true when dns_records_found is false. "
             "The output must be valid JSON with keys: dns_records_found, health_verified, "
             "detected_txt_record, and summary."
         )
@@ -162,77 +227,17 @@ class SlaUptimeVault(gl.Contract):
         detected_record = str(result.get("detected_txt_record", "")).strip()
         summary = str(result.get("summary", ""))
 
-        assert found == True, "[ERR_DATA_01] Failed to retrieve DNS records for domain."
+        # Guard against missing DNS data vs actual health breach
+        assert found == True, "[ERR_DATA_01] Failed to retrieve DNS records for domain. Audit aborted without penalization."
 
         if not health_verified:
             # SLA Violated / Outage -> Finalize Verdict SLA_VIOLATION_PENALIZED
             vault.status = "SLA_VIOLATION_PENALIZED"
             vault.last_audit_proof = (
-                f"SLA VIOLATION DETECTED: Required health token '{expected_token}' not found on '{domain}'. "
+                f"SLA VIOLATION DETECTED (Audited {today_str}): Required health token '{expected_token}' not found in DNS records for '{domain}'. "
                 f"SLA penalty condition triggered. " + summary
             )
         else:
-            # Grounded Time & Start-Date Guard
-            time_url = "https://api.frankfurter.app/latest?from=USD&to=EUR"
-
-            def get_time_input() -> str:
-                time_response = gl.nondet.web.render(time_url, mode="text")
-                return (
-                    f"Frankfurter Clock API Response (today's date):\n\n"
-                    f"{time_response}\n\n"
-                    f"SLA coverage start date: {s_date}\n"
-                    f"SLA coverage end date: {e_date}"
-                )
-
-            time_task = (
-                "You are a calendar date verification auditor.\n"
-                "Parse the Frankfurter API JSON response.\n"
-                "Extract the 'date' field (format YYYY-MM-DD) - this is today's date.\n"
-                "Compare today's date against SLA start_date and end_date.\n\n"
-                "Output JSON format:\n"
-                "{\n"
-                '  "today_date": "<YYYY-MM-DD from API>",\n'
-                '  "term_started": true/false,\n'
-                '  "term_expired": true/false\n'
-                "}\n"
-                "Set term_started to true if today_date >= start_date.\n"
-                "Set term_expired to true if today_date >= end_date.\n"
-                "Respond ONLY with raw JSON."
-            )
-
-            time_criteria = (
-                "Independently parse the Frankfurter API JSON to extract the 'date' field. "
-                "Compare it against the SLA start and end dates using string comparison. "
-                "REJECT the leader if: "
-                "(1) today_date does not match the 'date' field in the API response, "
-                "(2) term_started boolean is inconsistent with (today_date >= start_date) in EITHER direction, or "
-                "(3) term_expired boolean is inconsistent with (today_date >= end_date) in EITHER direction."
-            )
-
-            time_result = gl.eq_principle.prompt_non_comparative(
-                get_time_input,
-                task=time_task,
-                criteria=time_criteria
-            )
-
-            raw_time = time_result.strip()
-            if "</think>" in raw_time:
-                raw_time = raw_time.split("</think>")[-1].strip()
-            if raw_time.startswith("```"):
-                t_lines = raw_time.split("\n")
-                if len(t_lines) >= 3 and t_lines[0].startswith("```") and t_lines[-1].startswith("```"):
-                    raw_time = "\n".join(t_lines[1:-1]).strip()
-                else:
-                    raw_time = raw_time.replace("```json", "").replace("```", "").strip()
-
-            time_parsed = json.loads(raw_time)
-            term_started = bool(time_parsed.get("term_started", False))
-            term_expired = bool(time_parsed.get("term_expired", False))
-            today_str = str(time_parsed.get("today_date", ""))
-
-            # Start-Date Guard: Prevent audit settlement before start_date
-            assert term_started == True, f"[ERR_TERM_01] SLA audit rejected: today's date ({today_str}) is before coverage start_date ({s_date})."
-
             if term_expired:
                 # SLA Term Completed Without Outage -> SLA_PERIOD_COMPLETED_PASSED
                 vault.status = "SLA_PERIOD_COMPLETED_PASSED"
@@ -253,6 +258,11 @@ class SlaUptimeVault(gl.Contract):
     def get_vault(self, vault_id: str) -> SlaVault:
         assert vault_id in self.vaults, "[ERR_STATE_01] SLA Vault ID does not exist."
         return self.vaults[vault_id]
+
+    @gl.public.view
+    def is_sla_violated(self, vault_id: str) -> bool:
+        assert vault_id in self.vaults, "[ERR_STATE_01] SLA Vault ID does not exist."
+        return self.vaults[vault_id].status == "SLA_VIOLATION_PENALIZED"
 
     @gl.public.view
     def get_total_vaults(self) -> u256:
