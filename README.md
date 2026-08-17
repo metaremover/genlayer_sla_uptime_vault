@@ -1,21 +1,26 @@
 # Decentralized Infrastructure SLA Uptime & SLA Breach Decision Oracle
 
-An Intelligent Contract decision primitive built on **GenLayer** for automated enterprise IT infrastructure SLA monitoring, DNS health token auditing, and SLA breach decision gates grounded in Google Public DNS and grounded calendar time APIs.
+An Intelligent Contract decision primitive built on **GenLayer** for automated enterprise IT infrastructure SLA monitoring, DNS health token auditing, and SLA breach decision gates grounded in Google Public DNS and authoritative real-time UTC atomic clock APIs.
 
 ---
 
 ## 📖 Overview
 
-The `SlaUptimeVault` decision oracle allows enterprise IT providers and clients to register SLA coverage parameters. Rather than holding unbacked token deposits, it substantively binds grounded calendar dates (`api.frankfurter.app`) and Google Public DNS health token records (`dns.google`) to produce on-chain decision verdicts (`SLA_COVERAGE_ACTIVE` $\rightarrow$ `SLA_VIOLATION_PENALIZED` / `SLA_PERIOD_COMPLETED_PASSED`).
+The `SlaUptimeVault` decision oracle allows enterprise IT providers and clients to register SLA coverage parameters. Rather than holding unbacked token deposits or relying on bank-day currency calendars, it substantively binds **authoritative live UTC atomic clock APIs** (`timeapi.io`) and **Google Public DNS health token records** (`dns.google`) to produce on-chain decision verdicts (`SLA_COVERAGE_ACTIVE` $\rightarrow$ `SLA_VIOLATION_PENALIZED` / `SLA_PERIOD_COMPLETED_PASSED`).
 
 ---
 
 ## 🛡️ Key Features & Guardrails
 
-1. **Start-Date Timing Guard Executed First**: Queries grounded calendar time from Frankfurter API (`api.frankfurter.app`) at the very beginning of the audit. Enforces `today_date >= start_date` (`[ERR_TERM_01]`), blocking ANY violation or audit transition before the SLA start date.
-2. **Bidirectional DNS Record Availability Binding**: Criteria requires consensus nodes to independently inspect DNS payload presence and reject proposals if `dns_records_found` is inconsistent in **EITHER direction** (true when missing or false when present).
-3. **Data Availability Assertion Guard**: Missing or corrupted DNS responses abort cleanly (`[ERR_DATA_01]`) without penalizing, preventing network dropouts from being recorded as SLA breach violations.
-4. **Access Control**: Audits strictly restricted to service provider, client, or contract operator (`[ERR_AUTH_01]`).
+1. **Authoritative 24/7/365 UTC Atomic Clock & Freshness Guard**:
+   - Queries the live authoritative real-time UTC Clock API (`https://timeapi.io/api/time/current/zone?timeZone=UTC`), ensuring accurate date tracking across weekends, Sundays, and public bank holidays without currency-data latency.
+   - Enforces `clock_fresh == True` (`[ERR_CLOCK_01]`) and `today_date >= start_date` (`[ERR_TERM_01]`) before ANY DNS evaluations or violation transitions.
+2. **Bidirectional DNS Record Availability Binding**:
+   - Criteria requires consensus nodes to independently inspect DNS payload presence and reject proposals if `dns_records_found` is inconsistent in **EITHER direction** (true when missing or false when present).
+3. **Data Availability Assertion Guard**:
+   - Missing or corrupted DNS responses abort cleanly (`[ERR_DATA_01]`) without penalizing, preventing temporary network dropouts from being recorded as SLA breach violations.
+4. **Access Control**:
+   - Audits strictly restricted to service provider, client, or contract operator (`[ERR_AUTH_01]`).
 
 ---
 
