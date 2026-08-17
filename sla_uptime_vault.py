@@ -95,42 +95,46 @@ class SlaUptimeVault(gl.Contract):
         s_date = vault.start_date
         e_date = vault.end_date
 
-        # STEP 1: GROUNDED CALENDAR TIME & START-DATE GUARD (FIRST ROUND)
-        # We must verify today_date >= start_date BEFORE evaluating any DNS health or violations
-        time_url = "https://api.frankfurter.app/latest?from=USD&to=EUR"
+        # STEP 1: AUTHORITATIVE UTC CLOCK & FRESHNESS GUARD (FIRST ROUND)
+        # We query the authoritative real-time UTC Clock API (timeapi.io)
+        # to ensure fresh 24/7/365 date coverage across weekends and holidays before evaluating DNS
+        time_url = "https://timeapi.io/api/time/current/zone?timeZone=UTC"
 
         def get_time_input() -> str:
             time_response = gl.nondet.web.render(time_url, mode="text")
             return (
-                f"Frankfurter Clock API Response (today's date):\n\n"
+                f"Authoritative UTC Atomic Clock API Response:\n\n"
                 f"{time_response}\n\n"
                 f"SLA coverage start date: {s_date}\n"
                 f"SLA coverage end date: {e_date}"
             )
 
         time_task = (
-            "You are a calendar date verification auditor.\n"
-            "Parse the Frankfurter API JSON response.\n"
-            "Extract the 'date' field (format YYYY-MM-DD) - this is today's date.\n"
+            "You are an authoritative calendar date & clock freshness auditor.\n"
+            "Parse the live UTC Clock API response.\n"
+            "Extract the live ISO date (format YYYY-MM-DD from dateTime or year/month/day fields) - this is today's current UTC date.\n"
             "Compare today's date against SLA start_date and end_date.\n\n"
             "Output JSON format:\n"
             "{\n"
-            '  "today_date": "<YYYY-MM-DD from API>",\n'
+            '  "today_date": "<YYYY-MM-DD>",\n'
             '  "term_started": true/false,\n'
-            '  "term_expired": true/false\n'
+            '  "term_expired": true/false,\n'
+            '  "clock_fresh": true/false\n'
             "}\n"
+            "Set clock_fresh to true if a valid current UTC date was successfully parsed.\n"
             "Set term_started to true if today_date >= start_date.\n"
             "Set term_expired to true if today_date >= end_date.\n"
             "Respond ONLY with raw JSON."
         )
 
         time_criteria = (
-            "Independently parse the Frankfurter API JSON to extract the 'date' field. "
+            "Independently parse the live UTC Clock API JSON to extract the current UTC date. "
             "Compare it against the SLA start and end dates using string comparison. "
             "REJECT the leader if: "
-            "(1) today_date does not match the 'date' field in the API response, "
-            "(2) term_started boolean is inconsistent with (today_date >= start_date) in EITHER direction, or "
-            "(3) term_expired boolean is inconsistent with (today_date >= end_date) in EITHER direction."
+            "(1) today_date does not match the live UTC date from the API response (YYYY-MM-DD), "
+            "(2) term_started boolean is inconsistent with (today_date >= start_date) in EITHER direction, "
+            "(3) term_expired boolean is inconsistent with (today_date >= end_date) in EITHER direction, or "
+            "(4) clock_fresh is marked true when the clock API response is missing or unparseable."
         )
 
         time_result = gl.eq_principle.prompt_non_comparative(
@@ -152,10 +156,12 @@ class SlaUptimeVault(gl.Contract):
         time_parsed = json.loads(raw_time)
         term_started = bool(time_parsed.get("term_started", False))
         term_expired = bool(time_parsed.get("term_expired", False))
+        clock_fresh = bool(time_parsed.get("clock_fresh", False))
         today_str = str(time_parsed.get("today_date", ""))
 
-        # Start-Date Guard: Prevent ANY violation or audit transition before start_date
-        assert term_started == True, f"[ERR_TERM_01] SLA audit rejected: today's date ({today_str}) is before coverage start_date ({s_date})."
+        # Freshness and Start-Date Guard: Prevent ANY violation or audit transition before start_date
+        assert clock_fresh == True, "[ERR_CLOCK_01] Failed to retrieve fresh authoritative UTC time."
+        assert term_started == True, f"[ERR_TERM_01] SLA audit rejected: current UTC date ({today_str}) is before coverage start_date ({s_date})."
 
         # STEP 2: GOOGLE PUBLIC DNS HEALTH AUDIT (SECOND ROUND)
         # Derive Google Public DNS TXT query URL internally from service domain
